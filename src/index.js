@@ -1,9 +1,9 @@
 'use strict';
 
 const { LocalDataTrack, connect, createLocalTracks } = require('twilio-video');
-const colorHash = new (require('color-hash'))();
 
-const canvas = document.getElementById('canvas');
+const download = document.getElementById('download');
+const file = document.getElementById('file');
 const connectButton = document.getElementById('connect');
 const disconnectButton = document.getElementById('disconnect');
 const form = document.getElementById('form');
@@ -13,38 +13,39 @@ const participants = document.getElementById('participants');
 const video = document.querySelector('#local-participant > video');
 
 /**
+ * Send a file over the LocalDataTrack
+ * @param {HTMLInputElement} fileInput
+ * @param {LocalDataTrack} dataTrack
+ */
+function sendFile(fileInput, dataTrack) {
+  const file = fileInput.files[0];
+  const chunkSize = 16384;
+  let nChunks = Math.ceil(file.size / chunkSize);
+  const sliceFile = function(offset) {
+    const reader = new window.FileReader();
+    reader.onload = (function(file) {
+      return function(e) {
+        console.log(--nChunks + ' chunks left to be sent');
+        dataTrack.send(e.target.result);
+        if (file.size > offset + e.target.result.byteLength) {
+          window.setTimeout(sliceFile, 100, offset + chunkSize);
+        }
+      };
+    })(file);
+    const slice = file.slice(offset, offset + chunkSize);
+    reader.readAsArrayBuffer(slice);
+  };
+  dataTrack.send(JSON.stringify({ name: file.name, size: file.size }));
+  sliceFile(0);
+}
+
+/**
  * Setup a LocalDataTrack to transmit mouse coordinates.
  * @returns {LocalDataTrack} dataTrack
  */
 function setupLocalDataTrack() {
   const dataTrack = new LocalDataTrack();
-
-  let mouseDown;
-  let mouseCoordinates;
-
-  window.addEventListener('mousedown', () => {
-    mouseDown = true;
-  }, false);
-
-  window.addEventListener('mouseup', () => {
-    mouseDown = false;
-  }, false);
-
-  window.addEventListener('mousemove', event => {
-    const { pageX: x, pageY: y } = event;
-    mouseCoordinates = { x, y };
-
-    if (mouseDown) {
-      const color = colorHash.hex(dataTrack.id);
-      drawCircle(canvas, color, x, y);
-
-      dataTrack.send(JSON.stringify({
-        mouseDown,
-        mouseCoordinates
-      }));
-    }
-  }, false);
-
+  file.addEventListener('change', () => sendFile(file, dataTrack));
   return dataTrack;
 }
 
@@ -99,13 +100,6 @@ function didDisconnect(error) {
 async function main() {
   const dataTrack = setupLocalDataTrack();
   const audioAndVideoTrack = await setupLocalAudioAndVideoTracks(video);
-
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  });
 
   const tracks = audioAndVideoTrack.concat(dataTrack);
 
@@ -206,11 +200,25 @@ function trackAdded(participant, track) {
   if (track.kind === 'audio' || track.kind === 'video') {
     track.attach(`#${participant.sid} > video`);
   } else if (track.kind === 'data') {
-    const color = colorHash.hex(track.id);
+    let fileBuf = [];
+    let fileInfo = null;
+    let sizeSoFar = 0;
     track.on('message', data => {
-      const { mouseDown, mouseCoordinates: { x, y } } = JSON.parse(data);
-      if (mouseDown) {
-        drawCircle(canvas, color, x, y);
+      if (!fileInfo) {
+        fileInfo = JSON.parse(data);
+        return;
+      }
+      fileBuf.push(data);
+      sizeSoFar += data.byteLength;
+      console.log(`${sizeSoFar} out of ${fileInfo.size} bytes downloaded`);
+      if (sizeSoFar >= fileInfo.size) {
+        const blob = new window.Blob(fileBuf);
+        download.href = window.URL.createObjectURL(blob);
+        download.download = fileInfo.name;
+        download.textContent = `Click to download ${fileInfo.name} (${sizeSoFar} bytes)`;
+        fileBuf = [];
+        fileInfo = null;
+        sizeSoFar = 0;
       }
     });
   }
@@ -227,30 +235,6 @@ function trackRemoved(participant, track) {
   if (track.kind === 'audio' || track.kind === 'video') {
     track.detach();
   }
-}
-
-/**
- * Draw a circle on the <canvas> element.
- * @param {HTMLCanvasElement} canvas
- * @param {string} color
- * @param {number} x
- * @param {number} y
- * @returns {void}
- */
-function drawCircle(canvas, color, x, y) {
-  const context = canvas.getContext('2d');
-  context.beginPath();
-  context.arc(
-    x,
-    y,
-    10,
-    0,
-    2 * Math.PI,
-    false);
-  context.fillStyle = color;
-  context.fill();
-  context.strokeStyle = '#000000';
-  context.stroke();
 }
 
 // Go!
