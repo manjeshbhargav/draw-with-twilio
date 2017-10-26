@@ -2,11 +2,7 @@ File Transfer with Twilio DataTracks
 ====================================
 
 This application demonstrates the DataTrack feature in twilio-video.js. With it,
-you can connect to a Room and draw on a shared "whiteboard" with other
-Participants. Try it out at
-[draw-with-twilio.appspot.com](https://draw-with-twilio.appspot.com).
-
-![Screenshot](screenshot.png)
+you can connect to a Room and transfer files to other Participants.
 
 Install
 -------
