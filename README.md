@@ -1,5 +1,5 @@
-Draw with Twilio
-================
+File Transfer with Twilio DataTracks
+====================================
 
 This application demonstrates the DataTrack feature in twilio-video.js. With it,
 you can connect to a Room and draw on a shared "whiteboard" with other
@@ -37,3 +37,15 @@ npm start
 ```
 
 Then, navigate to [localhost:9000](http://localhost:9000).
+
+File Transfer Parameters
+------------------------
+
+Two parameters can be configured for transferring files through DataTracks as follows:
+
+```
+http://localhost:9000/?chunkSize={chunkSize}&chunkInterval={chunkInterval}
+```
+
+* `[chunkSize=16384]` - The file chunk size (in bytes)
+* `[chunkInterval=0]` - The interval (in milliseconds) between each chunk transfer

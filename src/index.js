@@ -3,40 +3,75 @@
 const { LocalDataTrack, connect, createLocalTracks } = require('twilio-video');
 
 const download = document.getElementById('download');
-const file = document.getElementById('file');
 const connectButton = document.getElementById('connect');
 const disconnectButton = document.getElementById('disconnect');
-const form = document.getElementById('form');
+const fileInput = document.getElementById('file');
 const identityInput = document.getElementById('identity');
 const nameInput = document.getElementById('name');
 const participants = document.getElementById('participants');
 const video = document.querySelector('#local-participant > video');
 
+const DEFAULT_CHUNK_INTERVAL_MS = 0;
+const DEFAULT_CHUNK_SIZE_BYTES = 16384;
+
+/**
+ * Get a chunk of the give file.
+ * @param {*} file
+ * @param {number} offset
+ * @param {number} chunkSize
+ * @returns {Promise<*>}
+ */
+function getFileChunk(file, offset, chunkSize) {
+  return new Promise(resolve => {
+    const reader = new window.FileReader();
+    reader.addEventListener('load', event => {
+      resolve(event.target.result);
+    });
+    const fileChunk = file.slice(offset, offset + chunkSize);
+    reader.readAsArrayBuffer(fileChunk);
+  });
+}
+
+/**
+ * Wait for the given amount of time.
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
  * Send a file over the LocalDataTrack
- * @param {HTMLInputElement} fileInput
+ * @param {*} file
  * @param {LocalDataTrack} dataTrack
  */
-function sendFile(fileInput, dataTrack) {
-  const file = fileInput.files[0];
-  const chunkSize = 16384;
-  let nChunks = Math.ceil(file.size / chunkSize);
-  const sliceFile = function(offset) {
-    const reader = new window.FileReader();
-    reader.onload = (function(file) {
-      return function(e) {
-        console.log(--nChunks + ' chunks left to be sent');
-        dataTrack.send(e.target.result);
-        if (file.size > offset + e.target.result.byteLength) {
-          window.setTimeout(sliceFile, 100, offset + chunkSize);
-        }
-      };
-    })(file);
-    const slice = file.slice(offset, offset + chunkSize);
-    reader.readAsArrayBuffer(slice);
-  };
-  dataTrack.send(JSON.stringify({ name: file.name, size: file.size }));
-  sliceFile(0);
+async function sendFile(file, dataTrack) {
+  const { name, size } = file;
+  const params = getURLParameters();
+
+  const chunkInterval = params.has('chunkInterval')
+    ? Number(params.get('chunkInterval'))
+    : DEFAULT_CHUNK_INTERVAL_MS;
+
+  const chunkSize = params.has('chunkSize')
+    ? Number(params.get('chunkSize'))
+    : DEFAULT_CHUNK_SIZE_BYTES;
+
+  const nChunks = Math.ceil(size / chunkSize);
+
+  dataTrack.send(JSON.stringify({
+    chunkSize,
+    name,
+    size
+  }));
+
+  for (let offset = 0, chunksSoFar = 0; offset < size; offset += chunkSize) {
+    const chunk = await getFileChunk(file, offset, chunkSize);
+    dataTrack.send(chunk);
+    download.textContent = `${++chunksSoFar} out of ${nChunks} chunks sent`;
+    await new wait(chunkInterval);
+  }
 }
 
 /**
@@ -45,7 +80,9 @@ function sendFile(fileInput, dataTrack) {
  */
 function setupLocalDataTrack() {
   const dataTrack = new LocalDataTrack();
-  file.addEventListener('change', () => sendFile(file, dataTrack));
+  fileInput.addEventListener('change', () => {
+    sendFile(fileInput.files[0], dataTrack);
+  });
   return dataTrack;
 }
 
@@ -100,7 +137,6 @@ function didDisconnect(error) {
 async function main() {
   const dataTrack = setupLocalDataTrack();
   const audioAndVideoTrack = await setupLocalAudioAndVideoTracks(video);
-
   const tracks = audioAndVideoTrack.concat(dataTrack);
 
   connectButton.addEventListener('click', async event => {
@@ -200,28 +236,46 @@ function trackAdded(participant, track) {
   if (track.kind === 'audio' || track.kind === 'video') {
     track.attach(`#${participant.sid} > video`);
   } else if (track.kind === 'data') {
+    let chunksSoFar = 0;
     let fileBuf = [];
     let fileInfo = null;
-    let sizeSoFar = 0;
+    let nChunks = 0;
+
     track.on('message', data => {
       if (!fileInfo) {
         fileInfo = JSON.parse(data);
+        nChunks = Math.ceil(fileInfo.size / fileInfo.chunkSize);
         return;
       }
       fileBuf.push(data);
-      sizeSoFar += data.byteLength;
-      console.log(`${sizeSoFar} out of ${fileInfo.size} bytes downloaded`);
-      if (sizeSoFar >= fileInfo.size) {
-        const blob = new window.Blob(fileBuf);
-        download.href = window.URL.createObjectURL(blob);
-        download.download = fileInfo.name;
-        download.textContent = `Click to download ${fileInfo.name} (${sizeSoFar} bytes)`;
-        fileBuf = [];
-        fileInfo = null;
-        sizeSoFar = 0;
+      download.textContent = `${++chunksSoFar} out of ${nChunks} chunks received`;
+
+      if (chunksSoFar < nChunks) {
+        return;
       }
+      const blob = new window.Blob(fileBuf);
+      download.href = window.URL.createObjectURL(blob);
+      download.download = fileInfo.name;
+      download.textContent = fileInfo.name;
+
+      chunksSoFar = 0;
+      fileBuf = [];
+      fileInfo = null;
+      nChunks = 0;
     });
   }
+}
+
+/**
+ * Get URL parameters in a Map.
+ * @param {string} [url=window.location.href]
+ * @returns {Map<string, string>}
+ */
+function getURLParameters(url) {
+  url = url || window.location.href;
+  const search = url.split('?')[1] || '';
+  const nvPairs = search.match(/([^?&=]+)=([^?&=]+)/g) || [];
+  return new Map(nvPairs.map(nvPair => nvPair.split('=')));
 }
 
 /**
